@@ -24,12 +24,13 @@ from ws4py.server.wsgirefserver import (
 from ws4py.server.wsgiutils import WebSocketWSGIApplication
 import numpy as np
 import cv2
+import click
 
 ###########################################
 # CONFIGURATION
 WIDTH = 640
 HEIGHT = 480
-FRAMERATE = 24
+FRAMERATE = 1
 HTTP_PORT = 8082
 WS_PORT = 8084
 COLOR = u'#444'
@@ -40,7 +41,6 @@ VFLIP = False
 HFLIP = False
 
 ###########################################
-
 
 class StreamingHttpHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
@@ -90,7 +90,9 @@ class StreamingWebSocket(WebSocket):
 
 
 class BroadcastOutput(object):
-    def __init__(self, camera):
+    def __init__(self, camera, net, draw):
+        self.net = net
+        self.draw = draw
         print('Spawning background conversion process')
         self.converter = Popen([
             'ffmpeg',
@@ -111,11 +113,12 @@ class BroadcastOutput(object):
 
         # Convert YUV420 to BGR (for testing), applies BT.601 "Limited Range" conversion.
         bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
-        rgb = bgr[:,:,::-1]
-        
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        out = self.net.inference(rgb)[0]
+        self.net.draw_boxes(rgb, out[0], class_idx=out[2], class_prob=out[1])
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         back_to_yuv = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420)
         b = back_to_yuv.tobytes()
-        # print(np.array(bgr))
         self.converter.stdin.write(b)
 
     def flush(self):
@@ -143,7 +146,14 @@ class BroadcastThread(Thread):
             self.converter.stdout.close()
 
 
-def main():
+@click.command()
+@click.option('--weight_path')
+@click.option('--model_config')
+@click.option('--class_names', default="person")
+@click.option('--draw', default=False)
+def main(weight_path, model_config, class_names, draw):
+    print("making net...")
+    net = YoloRunner(weight_path=weight_path, model_config=model_config, class_names=["person"])
     print('Initializing camera')
     with picamera.PiCamera() as camera:
         camera.resolution = (WIDTH, HEIGHT)
@@ -164,10 +174,11 @@ def main():
         http_server = StreamingHttpServer()
         http_thread = Thread(target=http_server.serve_forever)
         print('Initializing broadcast thread')
-        output = BroadcastOutput(camera)
+        output = BroadcastOutput(camera, net, draw)
         broadcast_thread = BroadcastThread(output.converter, websocket_server)
         print('Starting recording')
         camera.start_recording(output, 'yuv')
+        error = None
         try:
             print('Starting websockets thread')
             websocket_thread.start()
@@ -177,8 +188,8 @@ def main():
             broadcast_thread.start()
             while True:
                 camera.wait_recording(1)
-        except KeyboardInterrupt:
-            pass
+        except Exception as e:
+            err = e 
         finally:
             print('Stopping recording')
             camera.stop_recording()
@@ -192,6 +203,8 @@ def main():
             http_thread.join()
             print('Waiting for websockets thread to finish')
             websocket_thread.join()
+            if error is not None:
+                raise e
 
 
 if __name__ == '__main__':
