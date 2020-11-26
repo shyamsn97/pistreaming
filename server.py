@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import yolov3
+
 import sys
 import io
 import os
@@ -12,7 +14,7 @@ from time import sleep, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from wsgiref.simple_server import make_server
 
-import picamera
+# import picamera
 from ws4py.websocket import WebSocket
 from ws4py.server.wsgirefserver import (
     WSGIServer,
