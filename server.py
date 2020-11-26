@@ -20,6 +20,8 @@ from ws4py.server.wsgirefserver import (
     WebSocketWSGIRequestHandler,
 )
 from ws4py.server.wsgiutils import WebSocketWSGIApplication
+import numpy as np
+import cv2
 
 ###########################################
 # CONFIGURATION
@@ -103,6 +105,15 @@ class BroadcastOutput(object):
             shell=False, close_fds=True)
 
     def write(self, b):
+        yuv = np.frombuffer(b, dtype=np.uint8).reshape((HEIGHT*3//2, WIDTH))
+
+        # Convert YUV420 to BGR (for testing), applies BT.601 "Limited Range" conversion.
+        bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
+        rgb = bgr[:,:,::-1]
+        
+        back_to_yuv = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420)
+        b = back_to_yuv.tobytes()
+        # print(np.array(bgr))
         self.converter.stdin.write(b)
 
     def flush(self):
@@ -121,6 +132,7 @@ class BroadcastThread(Thread):
         try:
             while True:
                 buf = self.converter.stdout.read1(32768)
+                # print(buf)
                 if buf:
                     self.websocket_server.manager.broadcast(buf, binary=True)
                 elif self.converter.poll() is not None:
